@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>2026液態靈魂收集冊</title>
+    <!-- 必要的穩定版載入 -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+    <style>
+        body { -webkit-tap-highlight-color: transparent; background-color: #FDFCF8; margin: 0; font-family: -apple-system, sans-serif; }
+        .safe-area { padding-bottom: env(safe-area-inset-bottom); }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .active-btn { background-color: #A3B18A !important; color: white !important; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+        const { ChevronLeft, ChevronRight, List, Calendar: CalIcon, Plus, Trash2, Save, X, Loader2, Sparkles, BarChart3 } = lucide;
+
+        // 【最重要的一件事：固定房號，資料不丟失】
+        const appId = 'boba-warrior-2026-permanent-vault'; 
+        const firebaseConfig = JSON.parse(window.__firebase_config || '{}');
+        
+        if (firebaseConfig.apiKey && !firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+
+        const SHOP_MAP = [
+            { label: "五", full: "五十嵐" }, { label: "麻", full: "麻古" },
+            { label: "可", full: "可不可" }, { label: "烏", full: "烏弄" },
+            { label: "茗", full: "大茗" }, { label: "迷", full: "迷客夏" },
+            { label: "龜", full: "龜記" }, { label: "沐", full: "一沐日" },
+            { label: "桐", full: "五桐號" }, { label: "鮮", full: "鮮茶道" },
+            { label: "爹", full: "老爹紅茶" }, { label: "其他", full: "" }
+        ];
+
+        const BobaCup = ({ className }) => (
+            <svg viewBox="0 0 24 24" fill="none" className={className} style={{display:'block'}}><rect x="13.5" y="4" width="1.5" height="3" rx="0.5" fill="currentColor"/><rect x="7" y="7" width="10" height="1.2" rx="0.6" fill="currentColor"/><path d="M8 8.2L9.2 17.5C9.3 18.1 9.7 18.5 10.3 18.5H13.7C14.3 18.5 14.7 18.1 14.8 17.5L16 8.2H8Z" fill="currentColor" opacity="0.8"/></svg>
+        );
+
+        function App() {
+            const [user, setUser] = useState(null);
+            const [isReady, setIsReady] = useState(false);
+            const [curDate, setCurDate] = useState(new Date(2026, 0, 1));
+            const [records, setRecords] = useState({});
+            const [page, setPage] = useState(1);
+            const [modal, setModal] = useState(false);
+            const [editData, setEditData] = useState([]);
+            const [selDate, setSelDate] = useState(null);
+
+            useEffect(() => {
+                const unsub = auth.onAuthStateChanged(u => {
+                    if (!u) auth.signInAnonymously();
+                    setUser(u);
+                    setIsReady(true);
+                });
+                return () => unsub();
+            }, []);
+
+            useEffect(() => {
+                if (!user) return;
+                const ref = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('settings').doc('boba_records');
+                return ref.onSnapshot(snap => { if (snap.exists()) setRecords(snap.data()); });
+            }, [user]);
+
+            const allDrinks = useMemo(() => Object.entries(records).sort((a,b) => a[0].localeCompare(b[0])).flatMap(([d, drinks]) => drinks), [records]);
+
+            // --- 核心邏輯：自動歸類 ---
+            const stats = useMemo(() => {
+                const c = { pure: 0, pure_t: 0, milk: 0, milk_t: 0, fruit: 0, fruit_t: 0, other: 0 };
+                const tKeys = ["珠", "圓", "椰", "Ｑ", "Q", "凍", "燕麥", "波", "角", "寒天", "粿", "粉條", "仙草", "愛玉"];
+                const fKeys = ["汁", "檸檬", "果", "柚", "萄", "葡", "梅", "蜜", "橙", "芒", "梨", "蘋", "鳳梨", "桑", "芭", "旺來"];
+                const mKeys = ["奶", "拿鐵", "歐蕾", "鮮乳", "牛奶", "那提", "那堤", "拿提", "醇奶", "奶蓋"];
+
+                allDrinks.forEach(d => {
+                    const item = d.item || "";
+                    if (item.includes("多多綠")) { c.other++; return; }
+                    if (((d.shop || "").includes("五十嵐")) && item.includes("一號")) { c.pure_t++; return; }
+                    
+                    const hasT = tKeys.some(k => item.includes(k));
+                    const hasF = fKeys.some(k => item.includes(k));
+                    const isM = mKeys.some(k => item.includes(k)) || item.includes("芝芝");
+
+                    if (item.includes("芝芝")) {
+                        (hasT || hasF) ? c.milk_t++ : c.milk++;
+                    } else if (isM) {
+                        hasT ? c.milk_t++ : c.milk++;
+                    } else if (hasF) {
+                        hasT ? c.fruit_t++ : c.fruit++;
+                    } else if (item) {
+                        const isTea = ["茶", "紅", "綠", "青", "烏", "菁"].some(k => item.includes(k));
+                        if (isTea) hasT ? c.pure_t++ : c.pure++; else c.other++;
+                    } else { c.other++; }
+                });
+                const total = allDrinks.length || 1;
+                return [
+                    { l: "純茶", count: c.pure, color: "bg-[#D8A7B1]", p: (c.pure/total)*100 },
+                    { l: "純茶+料", count: c.pure_t, color: "bg-[#E7C6C6]", p: (c.pure_t/total)*100 },
+                    { l: "乳香", count: c.milk, color: "bg-[#D8A7B1]", p: (c.milk/total)*100 },
+                    { l: "乳香+料", count: c.milk_t, color: "bg-[#E7C6C6]", p: (c.milk_t/total)*100 },
+                    { l: "果韻", count: c.fruit, color: "bg-[#D8A7B1]", p: (c.fruit/total)*100 },
+                    { l: "果韻+料", count: c.fruit_t, color: "bg-[#E7C6C6]", p: (c.fruit_t/total)*100 },
+                    { l: "其他", count: c.other, color: "bg-[#B6A19E]", p: (c.other/total)*100 }
+                ];
+            }, [allDrinks]);
+
+            const mIdx = curDate.getMonth();
+            const summary = useMemo(() => {
+                let mC=0, mA=0, yC=0, yA=0;
+                Object.entries(records).forEach(([d, drinks]) => {
+                    const p = d.split('-');
+                    if (p[0]==='2026') {
+                        yC += drinks.length; yA += drinks.reduce((s, x) => s + (Number(x.price)||0), 0);
+                        if (parseInt(p[1])===mIdx+1) {
+                            mC += drinks.length; mA += drinks.reduce((s, x) => s + (Number(x.price)||0), 0);
+                        }
+                    }
+                });
+                return { mC, mA, yC, yA };
+            }, [records, mIdx]);
+
+            if (!isReady) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="animate-spin text-[#A3B18A]" /></div>;
+
+            return (
+                <div className="max-w-4xl mx-auto p-4 safe-area pb-12">
+                    <nav className="mb-6 flex justify-end gap-2">
+                        <button onClick={()=>setPage(1)} className={`px-4 py-2 rounded-full text-xs font-black flex items-center gap-2 border border-[#A3B18A] text-[#A3B18A] ${page===1?'active-btn':''}`}><CalIcon size={14}/> 日曆</button>
+                        <button onClick={()=>setPage(2)} className={`px-4 py-2 rounded-full text-xs font-black flex items-center gap-2 border border-[#A3B18A] text-[#A3B18A] ${page===2?'active-btn':''}`}><List size={14}/> 清單</button>
+                        <button onClick={()=>setPage(3)} className={`px-4 py-2 rounded-full text-xs font-black flex items-center gap-2 border border-[#A3B18A] text-[#A3B18A] ${page===3?'active-btn':''}`}><BarChart3 size={14}/> 分析</button>
+                    </nav>
+
+                    {page === 1 && (
+                        <div className="animate-in">
+                            <header className="relative mb-6 py-8 px-6 rounded-3xl bg-[#FFEDD5] text-[#B45309] overflow-hidden border-4 border-[#B45309] text-center">
+                                <h1 className="relative z-10 text-2xl md:text-5xl font-black mb-1">2026液態靈魂收集冊</h1>
+                                <p className="relative z-10 text-[#B45309]/70 font-bold text-[10px] md:text-xl">每一杯液態靈魂，都是對日常的微小補給</p>
+                            </header>
+
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+                                {[{ l: '當月杯數', v: summary.mC }, { l: '當月金額', v: `$${summary.mA}` }, { l: '年度杯數', v: summary.yC }, { l: '年度金額', v: `$${summary.yA}` }].map((it, i) => (
+                                    <div key={i} className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100 text-center">
+                                        <p className="text-[10px] font-black text-slate-400 uppercase">{it.l}</p>
+                                        <p className="text-xl font-black text-slate-700">{it.v}</p>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="bg-white rounded-[2rem] shadow-xl border overflow-hidden">
+                                <div className="bg-[#A3B18A] p-4 flex justify-between items-center text-white">
+                                    <button onClick={()=>setCurDate(new Date(2026, mIdx-1))}><ChevronLeft size={28}/></button>
+                                    <h2 className="text-xl font-black">2026年 {mIdx+1}月</h2>
+                                    <button onClick={()=>setCurDate(new Date(2026, mIdx+1))}><ChevronRight size={28}/></button>
+                                </div>
+                                <div className="p-3 grid grid-cols-7 gap-1 md:gap-2">
+                                    {['日','一','二','三','四','五','六'].map(d=><div key={d} className="text-center text-[10px] font-black text-slate-300">{d}</div>)}
+                                    {Array.from({ length: new Date(2026, mIdx, 1).getDay() }).map((_, i) => <div key={i}></div>)}
+                                    {Array.from({ length: new Date(2026, mIdx + 1, 0).getDate() }).map((_, i) => {
+                                        const d = i + 1; const ds = `2026-${mIdx + 1}-${d}`; const dr = records[ds] || [];
+                                        const isT = new Date().toDateString() === new Date(2026, mIdx, d).toDateString();
+                                        const bg = dr.length > 0 ? (dr.length > 1 ? 'bg-[#FFEDD5] text-orange-600' : 'bg-[#FEF9C3] text-yellow-700') : 'bg-slate-50 text-slate-300';
+                                        return (
+                                            <button key={d} onClick={()=>{ setSelDate(ds); setEditData(dr); setModal(true); }} className={`h-14 md:h-24 rounded-xl p-1 text-left ${bg} ${isT?'ring-2 ring-blue-400':''} flex flex-col transition-all`}>
+                                                <span className="text-[9px] font-black opacity-50">{d}</span>
+                                                <div className="flex-1 flex items-center justify-center">
+                                                    <div className="grid grid-cols-2 gap-0.5">
+                                                        {dr.slice(0,4).map((_, idx)=><BobaCup key={idx} className="w-4 h-4 md:w-8 md:h-8" />)}
+                                                    </div>
+                                                </div>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {page === 2 && (
+                        <div className="animate-in slide-in-from-bottom">
+                            <div className="bg-white rounded-3xl shadow-xl overflow-hidden border-[3px] border-blue-100 flex flex-col min-h-[400px]">
+                                <div className="bg-gradient-to-r from-blue-500 to-cyan-400 p-4 text-white text-center font-black"><h2>年度飲用軌跡</h2></div>
+                                <div className="p-4 bg-slate-50/50 flex-1">
+                                    <div className="bg-white rounded-2xl p-4 border border-blue-50 space-y-1">
+                                        {allDrinks.map((d, i) => (
+                                            <div key={i} className="text-xs md:text-base flex items-baseline gap-2">
+                                                <span className="text-blue-300 font-black w-6 text-right">{i+1}.</span>
+                                                <span className="font-black text-slate-700">{d.item}</span>
+                                                <span className="text-slate-400 font-light text-[10px] md:text-sm">{d.sugar}{d.ice} ({d.shop?d.shop.substring(0,1):'其'})</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {page === 3 && (
+                        <div className="animate-in zoom-in-95">
+                            <div className="bg-white rounded-3xl shadow-xl overflow-hidden border-[3px] border-[#E7C6C6] flex flex-col">
+                                <div className="bg-gradient-to-r from-[#B6A19E] to-[#A69695] p-6 text-white text-center font-black"><h2>成分分析報告</h2></div>
+                                <div className="p-4 md:p-8 space-y-6">
+                                    <div className="grid grid-cols-2 gap-4">
+                                        {stats.slice(0,6).map((cat, i) => (
+                                            <div key={i} className="bg-white rounded-2xl p-4 border border-[#E7C6C6] flex flex-col items-center shadow-sm">
+                                                <p className="text-xs font-black text-slate-400 mb-1">{cat.l}</p>
+                                                <p className="text-2xl font-black text-slate-700">{cat.count}<span className="text-[10px] opacity-30 ml-0.5">杯</span></p>
+                                                <div className="w-full bg-slate-100 rounded-full h-1.5 mt-3 overflow-hidden">
+                                                    <div className={`h-full ${cat.color} transition-all duration-1000`} style={{ width: `${Math.max(cat.p, 5)}%` }}></div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                        <div className="col-span-2 bg-white rounded-2xl p-6 border border-[#E7C6C6] flex flex-col items-center">
+                                            <p className="text-xs font-black text-slate-400 mb-1">{stats[6].l}</p>
+                                            <p className="text-3xl font-black text-slate-700">{stats[6].count}<span className="text-xs opacity-30 ml-0.5">杯</span></p>
+                                            <div className="w-full max-w-xs bg-slate-100 rounded-full h-2 mt-4 overflow-hidden">
+                                                <div className={`h-full ${stats[6].color} transition-all duration-1000`} style={{ width: `${Math.max(stats[6].p, 5)}%` }}></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {modal && (
+                        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                            <div className="bg-white w-full max-w-md rounded-[2rem] p-6 shadow-2xl max-h-[85vh] flex flex-col relative">
+                                <button onClick={()=>setModal(false)} className="absolute top-4 right-4 p-2 text-slate-300"><X size={24}/></button>
+                                <h3 className="font-black text-lg mb-4 text-slate-600">紀錄日期：{selDate}</h3>
+                                <div className="space-y-4 overflow-y-auto no-scrollbar pr-1 pb-4">
+                                    {editData.map((d, i) => (
+                                        <div key={i} className="p-4 bg-slate-50 rounded-2xl border relative">
+                                            <button onClick={()=>setEditData(editData.filter((_, idx)=>idx!==i))} className="absolute -top-2 -right-2 bg-red-400 text-white rounded-full p-1.5 shadow-md"><Trash2 size={14}/></button>
+                                            <input type="text" value={d.shop} onChange={e=>{const n=[...editData];n[i].shop=e.target.value;setEditData(n)}} placeholder="店名" className="w-full mb-2 p-2 rounded-xl text-sm font-bold outline-none border-none bg-white"/>
+                                            <input type="text" value={d.item} onChange={e=>{const n=[...editData];n[i].item=e.target.value;setEditData(n)}} placeholder="飲品名稱" className="w-full mb-2 p-2 rounded-xl text-sm outline-none border-none bg-white"/>
+                                            <input type="number" value={d.price||''} onChange={e=>{const n=[...editData];n[i].price=Number(e.target.value);setEditData(n)}} placeholder="價格" className="w-full p-2 rounded-xl text-sm font-black text-green-700 bg-white outline-none border-none"/>
+                                        </div>
+                                    ))}
+                                    {editData.length < 4 && <button onClick={()=>setEditData([...editData,{shop:'',item:'',sugar:'無糖',ice:'去冰',price:0}])} className="w-full py-4 border-2 border-dashed rounded-2xl text-slate-400 font-black text-sm">+ 新增一品項</button>}
+                                </div>
+                                <button onClick={async()=>{
+                                    const up = {...records, [selDate]: editData.filter(x=>x.item||x.shop)};
+                                    if(up[selDate].length===0) delete up[selDate];
+                                    await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('settings').doc('boba_records').set(up);
+                                    setModal(false);
+                                }} className="w-full mt-4 bg-[#A3B18A] text-white py-4 rounded-2xl font-black shadow-lg active:scale-95 transition-all">儲存變更</button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
+
